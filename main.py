@@ -14,64 +14,104 @@ from pymongo import MongoClient
 client = MongoClient(connection_string)
 
 db = client['default_db']
-crops_collection = db.crops_collection
+plants_collection = db.plants_collection
 
-class PhotoDetail(BaseModel):
-    photo_url: str
+class Spectrum(BaseModel):
+    name: str
+    value: int
+    type_of_measurment: str
+
+class Light(BaseModel):
+    number: int
+    spectrum: List[Spectrum]
+
+class EnvironmentData(BaseModel):
+    datetime: str
+    temperature: float
+    humidity: float
+    co2: int
+    start_day_time: int
+    work_day_time: int
+    light: Optional[List[Light]]
+
+class CCTV(BaseModel):
+    name: str
+    stream_url: str
+    table: int
+
+class ClimaticChamber(BaseModel):
+    name: str
+    cctv: Optional[List[CCTV]] = None 
+    environment_data: Optional[List[EnvironmentData]] = None
+
+class Place(BaseModel):
+    address: str
+    climatic_chamber: List[ClimaticChamber]
 
 class Indicator(BaseModel):
     name: str
     executionDate: str
-    executors: List[str]
     value: float
     measurement_type: str
 
-class CropBase(BaseModel):
-    id: str
-    cropType: str = Field(..., alias="cropType")
-    indicators: Optional[List[Indicator]] = None
-    photo_url: Optional[List[PhotoDetail]] = None
+class Plant(BaseModel):
+    uid: str
+    type_of_plant: str
+    indicator: List[Indicator]
+    photo_url: List[str]
 
-class CropCreate(CropBase):
-    pass
+class Experiment(BaseModel):
+    start_date: str
+    end_date: str
+    place: Place
+    plant: List[Plant]
 
-class CropUpdate(CropBase):
-    pass
 
 
-# CRUD crops
-@app.post("/crops/", response_model=CropCreate)
-async def create_crop(crop: CropCreate):
-    existing_crop = crops_collection.find_one({"id": crop.id})
-    if existing_crop:
-        raise HTTPException(status_code=400, detail="Crop already exists")
-    result = crops_collection.insert_one(crop.model_dump(by_alias=True))
-    return crop
 
-@app.get("/crops/", response_model=List[CropBase])
-async def get_all_crops():
-        crops = list(crops_collection.find({}))
-        return crops
+# CRUD plants
+@app.post("/plants/", response_model=Plant)
+def create_plant(plant: Plant):
+    existing_plant = plants_collection.find_one({"uid": plant.uid})
+    if existing_plant:
+        raise HTTPException(status_code=400, detail="plant already exists")
+    result = plants_collection.insert_one(plant.model_dump())
+    return plant
 
-@app.delete("/crops/{crop_id}")
-async def delete_crop(crop_id: str):
-    result = crops_collection.delete_one({"id": crop_id})
+@app.get("/plants/", response_model=List[Plant])
+def get_all_plants():
+        plants = list(plants_collection.find({}))
+        return plants
+
+@app.delete("/plants/{plant_uid}")
+def delete_plant(plant_uid: str):
+    result = plants_collection.delete_one({"uid": plant_uid})
     if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Crop not found")
-    return {"message": "Crop deleted successfully"}
+        raise HTTPException(status_code=404, detail="plant not found")
+    return {"message": "plant deleted successfully"}
 
 
+@app.put("/plants/{plant_uid}", response_model=Plant)
+def update_plant(plant: Plant, plant_uid: str):
+    existing_plant = plants_collection.find_one({"uid": plant_uid})
+    if not(existing_plant):
+        raise HTTPException(status_code=400, detail="plant doesn't exists")
+    
+    existing_another_plant = plants_collection.find_one({"uid": plant.uid})
 
+    result = plants_collection.update_one(
+        {"uid": plant_uid},
+        {"$set": plant},
+    )
 
-
-@app.post("/crops/{crop_id}/indicators/", response_model=Indicator)
-async def add_indicator(crop_id: str, indicator: Indicator):
-    result = crops_collection.update_one(
-        {"id": crop_id},
+@app.post("/plants/{plant_uid}/indicators/", response_model=Indicator)
+def add_indicator(plant_uid: str, indicator: Indicator):
+    result = plants_collection.update_one(
+        {"uid": plant_uid},
         {"$push": {"indicators": indicator.model_dump()}}
     )
     if result.modified_count == 0:
-        raise HTTPException(status_code=404, detail="Crop not found")
+        raise HTTPException(status_code=404, detail="plant not found")
     return indicator
 
 
