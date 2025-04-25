@@ -1,7 +1,8 @@
 
-
 from fastapi import FastAPI, HTTPException
-from pymongo import MongoClient
+from influxdb_client import InfluxDBClient
+from mongoengine import connect, Document, StringField, IntField, ReferenceField, ListField, FloatField, \
+    EmbeddedDocument, EmbeddedDocumentField
 from pydantic import BaseModel, Field
 from datetime import date
 from bson import ObjectId
@@ -11,17 +12,16 @@ app = FastAPI()
 
 # Provide the mongodb url to connect python to mongodb using pymongo
 connection_string = 'mongodb://gen_user:qwerty120978@5.129.197.38:27017/default_db?authSource=admin&directConnection=true'
+influx_url = "http://103.74.93.149:8086"
+influx_token = "cQ5_9qwHUehOeGa-iE1SM_7bGqM5oxKwcewc3PDtGWhcgJ6rD2pIIEJc4BvAYkFUcm8ClO3odZ_IQQwayigI9w=="
+influx_org = "cbt"
 
-# Create a connection using MongoClient.
 from pymongo import MongoClient
 client = MongoClient(connection_string)
 
-db = client['default_db']
-pheno_collection = db.pheno_collection
-
-class RangeEnvironmentData(BaseModel):
-    startDateTime: str
-    endDateTime: str
+class RangeDate(BaseModel):
+    startUnixDateTime: int
+    endUnixDateTime: int
 
 # class Spectrum(BaseModel):
 #     name: str
@@ -53,7 +53,7 @@ class ClimaticChamber(BaseModel):
 
 class Place(BaseModel):
     address: str
-    climaticChamber: List[str]
+    climaticChamber: List[ClimaticChamber]
 
 class Indicator(BaseModel):
     name: str
@@ -62,7 +62,7 @@ class Indicator(BaseModel):
     measurementType: str
 
 class Plant(BaseModel):
-    uid: str
+    _id: str
     plantType: str
     indicator: List[Indicator]
     photoUrl: List[str]
@@ -73,6 +73,9 @@ class Experiment(BaseModel):
     place: Place
     plant: List[str]
 
+db = client['default_db']
+plant_collection = db.plant_collection
+experiment_collection = db.experiment_collection
 
 
 # CRUD climatic chamber
@@ -85,10 +88,30 @@ def create_climatic_chamber(climatic_chamber: ClimaticChamber):
 
 # CRUD environment_data
 
-@app.get("/chamber/{climatic_chamber_id}/environment_data/", response_model=RangeEnvironmentData)
-def get_range_of_environment_data(climatic_chamber_id: str, datetime: RangeEnvironmentData):
+@app.get("/environment_data/")
+def retrieve_data(range_date: RangeDate):
+    with InfluxDBClient(url=influx_url, token=influx_token, org=influx_org) as influx_client:
+        query_api = influx_client.query_api()
 
-    return data
+        query = f'''
+        from(bucket: "voronesh")
+        |> range(start: {range_date.startUnixDateTime}, stop: {range_date.endUnixDateTime})
+        |> filter(fn: (r) => r.domain == "sensor")
+        |> filter(fn: (r) => r.friendly_name =~ /ROOM1/)
+        |> filter(fn: (r) => r._field == "value")
+        |> filter(fn: (r) => r._measurement =~ /С/)
+        |> aggregateWindow(every: 1m, fn: mean)
+        |> yield()
+    '''
+        tables = query_api.query(query)
+        array_values = []
+        for table in tables:
+            print(table)
+            for record in table.records:
+                print(record)
+                array_values.append(record.get_value())
+            return array_values
+        return None
 
 
 @app.post("/chamber/{climatic_chamber_id}/cctv/", response_model=CCTV)
