@@ -1,14 +1,28 @@
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from influxdb_client import InfluxDBClient
-from mongoengine import connect, Document, StringField, IntField, ReferenceField, ListField, FloatField, \
-    EmbeddedDocument, EmbeddedDocumentField
 from pydantic import BaseModel, Field
 from datetime import date
 from bson import ObjectId
 from typing import List, Optional
 
 app = FastAPI()
+
+origins = [
+    "http://localhost",
+    "http://localhost:8080",
+    "http://localhost:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Provide the mongodb url to connect python to mongodb using pymongo
 connection_string = 'mongodb://gen_user:qwerty120978@5.129.197.38:27017/default_db?authSource=admin&directConnection=true'
@@ -20,8 +34,8 @@ from pymongo import MongoClient
 client = MongoClient(connection_string)
 
 class RangeDate(BaseModel):
-    startUnixDateTime: int
-    endUnixDateTime: int
+    startDate: int
+    endDate: int
 
 # class Spectrum(BaseModel):
 #     name: str
@@ -41,14 +55,9 @@ class EnvironmentData(BaseModel):
     # workDayTime: int
     # light: Optional[List[Light]] = []
 
-class CCTV(BaseModel):
-    name: str
-    streamUrl: str
-    table: int
-
 class ClimaticChamber(BaseModel):
     name: str
-    cctv: Optional[List[CCTV]] = []
+    tableId: List[int]
 
 class IndicatorType(BaseModel):
     name: str
@@ -65,12 +74,15 @@ class Plant(BaseModel):
     plantType: str
     indicator: Optional[List[Indicator]] = []
     photoUrl: Optional[List[str]] = []
+    tableId: int
+    experimentId: str
 
 class Experiment(BaseModel):
-    startDate: str
-    endDate: str
-    chamber_id: str
-    plant: List[str]
+    name: str
+    startDate: int
+    endDate: int
+    chamberId: str
+
 
 db = client['default_db']
 plant_collection = db.plant_collection
@@ -79,7 +91,7 @@ chamber_collection = db.chamber_collection
 indicator_type_collection = db.indicator_type_collection
 
 
-# CRUD environment_data
+# environment_data
 
 @app.get("/environment_data/")
 def retrieve_data(range_date: RangeDate):
@@ -88,7 +100,7 @@ def retrieve_data(range_date: RangeDate):
 
         query = f'''
         from(bucket: "voronesh")
-        |> range(start: {range_date.startUnixDateTime}, stop: {range_date.endUnixDateTime})
+        |> range(start: {range_date.startDate}, stop: {range_date.endDate})
         |> filter(fn: (r) => r.domain == "sensor")
         |> filter(fn: (r) => r.friendly_name =~ /ROOM1/)
         |> filter(fn: (r) => r._field == "value")
@@ -115,40 +127,76 @@ def create_climatic_chamber(climatic_chamber: ClimaticChamber):
         return HTTPException(status_code=501, detail="Error: cannot create climate chamber ")
     return climatic_chamber
 
-
-@app.post("/chamber/{climatic_chamber_id}/cctv/", response_model=CCTV)
-def create_cctv(climatic_chamber_id: str, cctv: CCTV):
-    result = chamber_collection.update_one(
-        {"_id": ObjectId(climatic_chamber_id)},
-        {"$push": {"cctv": cctv.model_dump()}},
-        upsert=True
-    )
-    if result.modified_count == 0:
-        raise HTTPException(status_code=400, detail="Error: climatic chamber with this id doesn't exist ")
-    return cctv
-
-@app.delete("/chamber/cctv/{cctv_chamber_id}")
-def delete_cctv(cctv_chamber_id: str):
-    result = chamber_collection.delete_one({"_id": cctv_chamber_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="cctv not found")
-    return {"message": "plant deleted successfully"}
-
-@app.get("/chamber/{climatic_chamber_id}/cctv/")
-def get_cctv(climatic_chamber_id: str):
-    result = chamber_collection.find_one(
-        {"_id": ObjectId(climatic_chamber_id)},
-    )
+@app.get("/chamber/{chamber_id}", response_model=ClimaticChamber)
+def get_climatic_chamber(chamber_id: str):
+    result = chamber_collection.find_one({"_id": ObjectId(chamber_id)})
     if result is None:
-        raise HTTPException(status_code=400, detail="Error: CCTV with this id doesn't exist ")
-    return result.cctv
+        return HTTPException(status_code=404, detail="Chamber not found")
+    return result
+
+@app.get("/chamber/")
+def get_all_chambers():
+        chambers = list(chamber_collection.find({}))
+        for chamber in chambers:
+            chamber["_id"] = str(chamber["_id"])
+        return chambers
+
+@app.put("/chamber/{chamber_id}")
+def update_chamber(chamber_id: str, chamber: ClimaticChamber):
+    existing_chamber = chamber_collection.find_one_and_update({"_id": ObjectId(chamber_id)}, {"$set": chamber.model_dump()})
+    if existing_chamber is None:
+        return HTTPException(status_code=404, detail="Chamber not found")
+    return chamber
+
+@app.delete("/chamber/{chamber_id}")
+def delete_chamber(chamber_id: str):
+    result = chamber_collection.delete_one({"_id": ObjectId(chamber_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="chamber not found")
+    return JSONResponse({"message": "chamber deleted successfully"}, status_code=200)
+
+
+#CRUD experiment
+
+@app.post("/experiment/", response_model=Experiment)
+def create_experiment(experiment: Experiment):
+    result = experiment_collection.insert_one(experiment.model_dump())
+    if not result.inserted_id:
+        return HTTPException(status_code=501, detail="Error: cannot create experiment ")
+    return experiment
+
+@app.get("/experiment/")
+def get_all_experiments():
+        experiments = list(experiment_collection.find({}))
+        for experiment in experiments:
+            experiment["_id"] = str(experiment["_id"])
+        return experiments
+
+@app.get("/experiment/{experiment_id}", response_model=Experiment)
+def get_experiment(experiment_id: str):
+    result = experiment_collection.find_one({"_id": ObjectId(experiment_id)})
+    if result is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    return result
+
+
+@app.delete("/experiment/{experiment_id}")
+def delete_experiment(experiment_id: str):
+    result = experiment_collection.delete_one({"_id": experiment_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="experiment not found")
+    return JSONResponse({"message": "experiment deleted successfully"}, status_code=200)
+
+@app.put("/experiment/{experiment_id}", response_model=Experiment)
+def update_experiment(experiment: Plant, experiment_id: str):
+    existing_plant = experiment_collection.find_one_and_update({"_id": ObjectId(experiment_id)}, {"$set": experiment.model_dump()})
+    if existing_plant is None:
+        return HTTPException(status_code=404, detail="Chamber not found")
+    return experiment
 
 # CRUD plants
 @app.post("/plant/", response_model=Plant)
 def create_plant(plant: Plant):
-    existing_plant = plant_collection.find_one({"uid": plant.uid})
-    if existing_plant:
-        raise HTTPException(status_code=400, detail="plant already exists")
     result = plant_collection.insert_one(plant.model_dump())
     if not result.inserted_id:
         return HTTPException(status_code=501, detail="Error: cannot create plant ")
@@ -159,43 +207,40 @@ def get_all_plants():
         plants = list(plant_collection.find({}))
         for plant in plants:
             plant["_id"] = str(plant["_id"])
-        print(plants)
         return plants
+
+@app.get("/plant/{plant_id}", response_model=Plant)
+def get_plant(plant_id: str):
+    result = plant_collection.find_one({"_id": ObjectId(plant_id)})
+    if result is None:
+        raise HTTPException(status_code=404, detail="Plant not found")
+    return result
+
 
 @app.delete("/plant/{plant_id}")
 def delete_plant(plant_id: str):
     result = plant_collection.delete_one({"_id": plant_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="plant not found")
-    return {"message": "plant deleted successfully"}
-
-
+    return JSONResponse({"message": "plant deleted successfully"}, status_code=200)
 
 @app.put("/plant/{plant_id}", response_model=Plant)
 def update_plant(plant: Plant, plant_id: str):
-    existing_plant = plant_collection.find_one({"_id": plant_id})
-    if not existing_plant:
-        raise HTTPException(status_code=400, detail="plant doesn't exists")
-
-    result = plant_collection.update_one(
-        {"_id": plant_id},
-        {"$set": plant},
-    )
-    if result.modified_count == 0:
-        raise HTTPException(status_code=501, detail="Error: cannot update plant")
+    existing_plant = plant_collection.find_one_and_update({"_id": ObjectId(plant_id)}, {"$set": plant.model_dump()})
+    if existing_plant is None:
+        return HTTPException(status_code=404, detail="Chamber not found")
+    return plant
 
 
 
 # CRUD indicator type
 @app.post("/indicator_type/", response_model=IndicatorType)
 def create_indicator_type(indicator_type: IndicatorType):
-    existing_indicator_type = indicator_type_collection.find_one({"name": indicator_type.name})
-    if existing_indicator_type:
-        raise HTTPException(status_code=400, detail="IndicatorType already exists")
+    print(indicator_type.model_dump())
     result = indicator_type_collection.insert_one(indicator_type.model_dump())
-    if not result.inserted_id:
+    if result.inserted_id == 0:
         return HTTPException(status_code=501, detail="Error: cannot create IndicatorType ")
-    return IndicatorType
+    return indicator_type
 
 @app.get("/indicator_type/")
 def get_all_indicator_types():
@@ -209,22 +254,16 @@ def delete_indicator_type(indicator_type_id: str):
     result = indicator_type_collection.delete_one({"_id": ObjectId(indicator_type_id)})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="IndicatorType not found")
-    return {"message": "IndicatorType deleted successfully"}
+    return JSONResponse({"message": "indicator type deleted successfully"}, status_code=200)
 
 @app.put("/indicator_type/{indicator_type_id}", response_model=IndicatorType)
 def update_indicator_type(indicator_type: IndicatorType, indicator_type_id: str):
-    existing_indicator_type = indicator_type_collection.find_one({"_id": ObjectId(indicator_type_id)})
-    if not existing_indicator_type:
-        raise HTTPException(status_code=400, detail="IndicatorType doesn't exists")
+    existing_indicator_type = indicator_type_collection.find_one_and_update({"_id": ObjectId(indicator_type_id)}, {"$set": indicator_type.model_dump()})
+    if existing_indicator_type is None:
+        return HTTPException(status_code=404, detail="Chamber not found")
+    return indicator_type
 
-    result = indicator_type_collection.update_one(
-        {"_id": indicator_type_id},
-        {"$set": indicator_type},
-    )
-    if result.modified_count == 0:
-        raise HTTPException(status_code=501, detail="Error: cannot update IndicatorType")
-
-@app.get("/indicator_type/{indicator_type_id}")
+@app.get("/indicator_type/{indicator_type_id}", response_model=IndicatorType)
 def get_indicator_type(indicator_type_id: str):
     result = indicator_type_collection.find_one({"_id": ObjectId(indicator_type_id)})
     if result is None:
@@ -234,49 +273,73 @@ def get_indicator_type(indicator_type_id: str):
 
 
 # CRUD indicator
-@app.post("/plant/{plant_id}/indicator/", response_model=Indicator)
-def create_indicator(plant_id: str, indicator: Indicator):
-    existing_plant = plant_collection.find_one({"_id": plant_id})
+@app.post("/plant/{plant_id}/indicator/")
+def create_indicator(plant_id: str, new_indicator: Indicator):
+    print(new_indicator.model_dump())
+    existing_plant = plant_collection.find_one({"_id": ObjectId(plant_id)})
     if existing_plant is None:
         raise HTTPException(status_code=400, detail="plant doesn't exists")
-    indicator_type = indicator_type_collection.find_one({"_id": ObjectId(indicator.indicatorType)})
+    indicator_type = indicator_type_collection.find_one({"_id": ObjectId(new_indicator.indicatorType)})
     if indicator_type is None:
         return HTTPException(status_code=501, detail="Error: cannot find indicator with this id ")
-
     result = plant_collection.update_one(
-        {"_id": plant_id},
-        {"$push": {"indicator": indicator.model_dump()}},
-        upsert=True
-    )
-    return Indicator
-
-@app.get("/plant/{plant_id}/indicator/", response_model=Indicator)
-def get_all_indicators_of_plant(plant_id: str):
-        existing_plant = plant_collection.find_one({"_id": plant_id})
-        if existing_plant is None:
-            raise HTTPException(status_code=400, detail="plant doesn't exists")
-        return existing_plant.indicator
-
-@app.delete("/plant/{plant_id}/indicator/{indicator_name}")
-def delete_indicator(indicator_name: str, plant_id: str):
-    existing_plant = plant_collection.find_one({"_id": plant_id})
-    if existing_plant is None:
-        raise HTTPException(status_code=400, detail="plant doesn't exists")
-    plant_collection.delete_one({"_id": plant_id, "indicator.name": indicator_name})
-    return {"message": "Indicator deleted successfully"}
-
-@app.put("/plant/{plant_id}/indicator/{indicator_id}", response_model=Indicator)
-def update_indicator(plant_id: str, indicator_id: str, indicator: Indicator):
-    existing_plant = plant_collection.find_one({"_id": plant_id})
-    if existing_plant is None:
-        raise HTTPException(status_code=400, detail="plant doesn't exists")
-
-    result = plant_collection.update_one(
-        {"_id": plant_id, "indicator._id": indicator_id},
-        {"$set": indicator},
+        {"_id": ObjectId(plant_id)},
+        {"$push": {"indicator": new_indicator.model_dump()}},
     )
     if result.modified_count == 0:
-        raise HTTPException(status_code=501, detail="Error: cannot update Indicator")
+        raise HTTPException(status_code=501, detail="Error: cannot create plant indicator or indicator type already exists ")
+
+    return JSONResponse({"message": "Indicator add successfully"}, status_code=201)
+
+
+@app.delete("/plant/{plant_id}/indicator/{indicator_type}")
+def delete_indicator(indicator_type: str, plant_id: str):
+    result = plant_collection.update_one({"_id": ObjectId(plant_id)}, {"$pull": {"indicator": {"indicatorType": indicator_type }}})
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Indicator or plant doesn't exists")
+    return JSONResponse({"message": "Indicator delete successfully"}, status_code=200)
+
+@app.put("/plant/{plant_id}/indicator/{indicator_type}")
+def update_indicator(plant_id: str, indicator_type: str, new_indicator: Indicator):
+    result = plant_collection.find_one_and_update(
+        {"_id": ObjectId(plant_id), "indicator.indicatorType": indicator_type},
+        {"$set": {"indicator.$": new_indicator.model_dump()}},
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Error: Indicator or plant doesn't exists")
+
+    return new_indicator
+
+
+# CRUD CCTV
+# @app.post("/chamber/{climatic_chamber_id}/cctv/", response_model=CCTV)
+# def create_cctv(climatic_chamber_id: str, cctv: CCTV):
+#     result = chamber_collection.update_one(
+#         {"_id": ObjectId(climatic_chamber_id)},
+#         {"$push": {"cctv": cctv.model_dump()}},
+#         upsert=True
+#     )
+#     if result.modified_count == 0:
+#         raise HTTPException(status_code=400, detail="Error: climatic chamber with this id doesn't exist ")
+#     return cctv
+#
+# @app.delete("/chamber/cctv/{cctv_chamber_id}")
+# def delete_cctv(cctv_chamber_id: str):
+#     result = chamber_collection.delete_one({"_id": cctv_chamber_id})
+#     if result.deleted_count == 0:
+#         raise HTTPException(status_code=404, detail="cctv not found")
+#     return {"message": "plant deleted successfully"}
+#
+# @app.get("/chamber/{climatic_chamber_id}/cctv/{cctv_id}", response_model=CCTV)
+# def get_cctv(climatic_chamber_id: str):
+#     result = chamber_collection.find_one(
+#         {"_id": ObjectId(climatic_chamber_id)},
+#     )
+#     if result is None:
+#         raise HTTPException(status_code=400, detail="Error: CCTV with this id doesn't exist ")
+#     return result.cctv
+
+
 
 # @app.get("/plant/{plant_id}/indicator/{indicator_id}")
 # def get_indicator(indicator_id: str):
@@ -289,20 +352,6 @@ def update_indicator(plant_id: str, indicator_id: str, indicator: Indicator):
 
 
 
-
-# @app.post("/plants/{plant_id}/indicators/", response_model=Indicator)
-# def create_indicator(plant_id: str, indicator: Indicator):
-#
-#     indicator_types =
-#     if indicator.indicatorType
-#     result = plant_collection.update_one(
-#         {"_id": plant_id},
-#         {"$push": {"indicators": indicator.model_dump()}},
-#         upsert=True
-#     )
-#     if result.modified_count == 0:
-#         raise HTTPException(status_code=404, detail="plant not found")
-#     return indicator
 
 
 
