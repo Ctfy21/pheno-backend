@@ -93,13 +93,13 @@ indicator_type_collection = db.indicator_type_collection
 
 # environment_data
 
-@app.get("/environment_data/")
-def retrieve_data(range_date: RangeDate):
+@app.post("/environment_data/{place}/temperature")
+def retrieve_data(range_date: RangeDate, place: str):
     with InfluxDBClient(url=influx_url, token=influx_token, org=influx_org) as influx_client:
         query_api = influx_client.query_api()
 
         query = f'''
-        from(bucket: "voronesh")
+        from(bucket: "{place}")
         |> range(start: {range_date.startDate}, stop: {range_date.endDate})
         |> filter(fn: (r) => r.domain == "sensor")
         |> filter(fn: (r) => r.friendly_name =~ /ROOM1/)
@@ -114,9 +114,35 @@ def retrieve_data(range_date: RangeDate):
             print(table)
             for record in table.records:
                 print(record)
-                array_values.append(record.get_value())
+                array_values.append([int(record.get_time().timestamp()), record.get_value()])
             return array_values
         return None
+
+@app.get("/environment_data/{place}/humidity")
+def retrieve_data(range_date: RangeDate, place: str):
+    with InfluxDBClient(url=influx_url, token=influx_token, org=influx_org) as influx_client:
+        query_api = influx_client.query_api()
+
+        query = f'''
+        from(bucket: "{place}")
+        |> range(start: {range_date.startDate}, stop: {range_date.endDate})
+        |> filter(fn: (r) => r.domain == "sensor")
+        |> filter(fn: (r) => r.friendly_name =~ /ROOM1/)
+        |> filter(fn: (r) => r._field == "value")
+        |> filter(fn: (r) => r._measurement =~ /%/)
+        |> aggregateWindow(every: 1m, fn: mean)
+        |> yield()
+    '''
+        tables = query_api.query(query)
+        array_values = []
+        for table in tables:
+            print(table)
+            for record in table.records:
+                print(record)
+                array_values.append([int(record.get_time().timestamp()), record.get_value()])
+            return array_values
+        return None
+
 
 
 # CRUD climatic chamber
@@ -309,6 +335,15 @@ def update_indicator(plant_id: str, indicator_type: str, new_indicator: Indicato
         raise HTTPException(status_code=404, detail="Error: Indicator or plant doesn't exists")
 
     return new_indicator
+
+@app.get("/experiment/{experiment_id}/plant")
+def get_all_plants_of_experiment(experiment_id: str):
+    plants = list(plant_collection.find({"experimentId": experiment_id}))
+    for plant in plants:
+        plant["_id"] = str(plant["_id"])
+    if plants is None:
+        raise HTTPException(status_code=404, detail="Plants not found")
+    return JSONResponse(plants, status_code=200)
 
 
 # CRUD CCTV
