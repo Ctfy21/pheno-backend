@@ -105,20 +105,18 @@ def retrieve_data(range_date: RangeDate, place: str):
         |> filter(fn: (r) => r.friendly_name =~ /ROOM1/)
         |> filter(fn: (r) => r._field == "value")
         |> filter(fn: (r) => r._measurement =~ /С/)
-        |> aggregateWindow(every: 1m, fn: mean)
+        |> aggregateWindow(every: 1h, fn: mean)
         |> yield()
     '''
         tables = query_api.query(query)
         array_values = []
         for table in tables:
-            print(table)
             for record in table.records:
-                print(record)
                 array_values.append([int(record.get_time().timestamp()), record.get_value()])
             return array_values
         return None
 
-@app.get("/environment_data/{place}/humidity")
+@app.post("/environment_data/{place}/humidity")
 def retrieve_data(range_date: RangeDate, place: str):
     with InfluxDBClient(url=influx_url, token=influx_token, org=influx_org) as influx_client:
         query_api = influx_client.query_api()
@@ -130,15 +128,13 @@ def retrieve_data(range_date: RangeDate, place: str):
         |> filter(fn: (r) => r.friendly_name =~ /ROOM1/)
         |> filter(fn: (r) => r._field == "value")
         |> filter(fn: (r) => r._measurement =~ /%/)
-        |> aggregateWindow(every: 1m, fn: mean)
+        |> aggregateWindow(every: 1h, fn: mean)
         |> yield()
     '''
         tables = query_api.query(query)
         array_values = []
         for table in tables:
-            print(table)
             for record in table.records:
-                print(record)
                 array_values.append([int(record.get_time().timestamp()), record.get_value()])
             return array_values
         return None
