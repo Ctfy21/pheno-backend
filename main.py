@@ -180,14 +180,14 @@ def delete_chamber(chamber_id: str):
 
 #CRUD experiment
 
-@app.post("/experiment/", response_model=Experiment)
+@app.post("/experiment", response_model=Experiment)
 def create_experiment(experiment: Experiment):
     result = experiment_collection.insert_one(experiment.model_dump())
     if not result.inserted_id:
         return HTTPException(status_code=501, detail="Error: cannot create experiment ")
     return experiment
 
-@app.get("/experiment/")
+@app.get("/experiment")
 def get_all_experiments():
         experiments = list(experiment_collection.find({}))
         for experiment in experiments:
@@ -210,9 +210,9 @@ def delete_experiment(experiment_id: str):
     return JSONResponse({"message": "experiment deleted successfully"}, status_code=200)
 
 @app.put("/experiment/{experiment_id}", response_model=Experiment)
-def update_experiment(experiment: Plant, experiment_id: str):
-    existing_plant = experiment_collection.find_one_and_update({"_id": ObjectId(experiment_id)}, {"$set": experiment.model_dump()})
-    if existing_plant is None:
+def update_experiment(experiment: Experiment, experiment_id: str):
+    existing_experiment = experiment_collection.find_one_and_update({"_id": ObjectId(experiment_id)}, {"$set": experiment.model_dump()})
+    if existing_experiment is None:
         return HTTPException(status_code=404, detail="Chamber not found")
     return experiment
 
