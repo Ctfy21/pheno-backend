@@ -1,0 +1,12 @@
+venv
+.venv
+__pycache__
+.idea
+results
+assets
+*.log
+*.xlsx
+runs
+yolo*
+services/train/digits
+services/train/seed
